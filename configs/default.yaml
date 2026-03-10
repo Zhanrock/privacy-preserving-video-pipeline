@@ -1,0 +1,91 @@
+# =============================================================================
+# Privacy-Preserving Video Pipeline — Default Configuration
+# =============================================================================
+
+project:
+  name: privacy-preserving-video-pipeline
+  version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# MySQL Database
+# ---------------------------------------------------------------------------
+database:
+  host: localhost
+  port: 3306
+  name: privacy_pipeline_db
+  user: pp_user
+  password: ""                   # Override via PPVP_DB_PASSWORD env var
+  charset: utf8mb4
+  pool_size: 5
+  connect_timeout: 10
+  max_retries: 3
+  retry_delay_sec: 2
+  fallback_to_sqlite: true       # Automatic SQLite fallback when MySQL unavailable
+  sqlite_path: ":memory:"
+
+# ---------------------------------------------------------------------------
+# Anonymization
+# ---------------------------------------------------------------------------
+anonymization:
+  face:
+    enabled: true
+    detector: haar_cascade
+    blur_method: pixelate         # gaussian | pixelate | solid
+    blur_strength: 25
+    padding_px: 10
+    min_detection_size: [30, 30]
+  license_plate:
+    enabled: true
+    blur_method: solid
+    aspect_ratio_range: [2.0, 6.0]
+  custom_regions:
+    enabled: false
+    regions: []
+
+# ---------------------------------------------------------------------------
+# Cryptography
+# ---------------------------------------------------------------------------
+crypto:
+  hmac:
+    algorithm: sha256
+    secret_key: ""               # Override via PPVP_HMAC_KEY env var
+    secret_key_min_length: 32
+  aes:
+    key_size_bits: 256
+    nonce_size_bytes: 12
+    tag_size_bytes: 16
+  kdf:
+    algorithm: argon2id
+    time_cost: 2
+    memory_cost_kb: 65536
+    parallelism: 2
+    hash_length: 32
+
+# ---------------------------------------------------------------------------
+# Pipeline
+# ---------------------------------------------------------------------------
+pipeline:
+  max_latency_ms: 30
+  batch_size: 1
+  output_format: jpeg
+  output_quality: 85
+  save_anonymized_frames: false
+  debug_output_dir: debug_frames/
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: INFO
+  log_dir: logs/
+  log_to_file: true
+  detection_log:
+    enabled: true
+    table: detection_events
+    include_frame_hash: true
+    include_region_coords: false
+    flush_interval_sec: 5
+  audit_log:
+    enabled: true
+    table: audit_trail
+    retention_days: 90

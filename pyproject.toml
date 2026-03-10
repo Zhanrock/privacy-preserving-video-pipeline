@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "privacy-preserving-video-pipeline"
+version = "1.0.0"
+description = "High-speed Privacy-by-Design video anonymization pipeline with cryptographic ID hashing and MySQL audit logging"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Privacy Pipeline Team" }]
+requires-python = ">=3.9"
+keywords = ["privacy", "video-analytics", "anonymization", "gdpr", "pdpa", "computer-vision"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Security :: Cryptography",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "pandas>=2.0.0",
+    "cryptography>=41.0.0",
+    "pyyaml>=6.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+mysql = [
+    "mysql-connector-python>=8.1.0",
+]
+api = [
+    "fastapi>=0.103.0",
+    "uvicorn[standard]>=0.23.0",
+    "python-multipart>=0.0.6",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.4.0",
+]
+
+[project.scripts]
+ppvp-process = "privacy_pipeline.cli:process"
+ppvp-report  = "privacy_pipeline.cli:report"
+ppvp-migrate = "privacy_pipeline.cli:migrate"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "integration: marks integration tests",
+    "mysql: marks tests requiring a live MySQL connection",
+    "slow: marks slow tests",
+]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+ignore_missing_imports = true
