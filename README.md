@@ -2,7 +2,7 @@
 
 > **High-speed, Privacy-by-Design video anonymization with AES-256-GCM encryption, HMAC-SHA256 pseudonymisation, and MySQL audit logging — GDPR & PDPA compliant.**
 
-[![CI](https://github.com/YOUR_USERNAME/privacy-preserving-video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/privacy-preserving-video-pipeline/actions)
+[![CI](https://github.com/Zhanrock/privacy-preserving-video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Zhanrock/privacy-preserving-video-pipeline/actions)
 [![Python](https://img.shields.io/badge/python-3.9%20|%203.10%20|%203.11-blue)](https://www.python.org)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-orange)](https://mysql.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
