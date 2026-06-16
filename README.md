@@ -1,27 +1,26 @@
-# 🔒 Privacy-Preserving Video Pipeline
+# PrivGrad — Privacy-Preserving Video Analytics
 
-> **High-speed, Privacy-by-Design video anonymization with AES-256-GCM encryption, HMAC-SHA256 pseudonymisation, and MySQL audit logging — GDPR & PDPA compliant.**
+> **NTU CCDS Research Project** | Assoc Prof Chee Wei Tan | June 2026
+> Target: NSDI 2026 / USENIX Security 2026
 
-[![CI](https://github.com/Zhanrock/privacy-preserving-video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Zhanrock/privacy-preserving-video-pipeline/actions)
+[![CI](https://github.com/Taishanrock/privacy-preserving-video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Taishanrock/privacy-preserving-video-pipeline/actions)
 [![Python](https://img.shields.io/badge/python-3.9%20|%203.10%20|%203.11-blue)](https://www.python.org)
-[![MySQL](https://img.shields.io/badge/MySQL-8.0+-orange)](https://mysql.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-105%20passing-brightgreen)]()
 
 ---
 
 ## Overview
 
-The **Privacy-Preserving Video Pipeline** automatically anonymizes sensitive data in video streams before forwarding to cloud analytics:
+**PrivGrad** reframes GDPR Article 30 audit logs — legally mandatory records of processing activities — as an *upstream optimization signal* for a TextGrad self-improvement loop.
 
-- **Face blurring** — Haar Cascade detection → Gaussian/pixelate/solid blur
-- **License plate masking** — MSER detection → solid black fill
-- **HMAC-SHA256 pseudonymisation** — tracking IDs hashed with a secret key; originals never stored
-- **AES-256-GCM encryption** — metadata encrypted at rest with authenticated encryption
-- **MySQL audit logging** — immutable GDPR Article 30 / PDPA compliance trail
-- **Sub-30ms target latency** — optimized for real-time safety monitoring
+Instead of treating compliance records as overhead, PrivGrad uses them as a continuous loss function: detection counts, blur parameters, privacy/utility scores, and GDPR gaps are summarized as natural language and fed into TextGrad (LLM-based automatic differentiation) to iteratively refine the pipeline configuration.
 
-Enables monitoring of **300M+ square metres** while complying with GDPR, PDPA, and equivalent data protection laws.
+**Key contributions:**
+- GDPR Art.30 audit log as a textual loss signal (not just compliance overhead)
+- TextGrad upstream loop: LLM backpropagation over pipeline configuration
+- SHA3-256 tamper-evident hash chaining on all audit entries
+- NemoBot agentic integration: `privacyAnalyze` + `textgradOptimize` tools
+- Three-era benchmark: Pre-AI (2018) → CNN Baseline (2022) → PrivGrad
 
 ---
 
@@ -31,33 +30,28 @@ Enables monitoring of **300M+ square metres** while complying with GDPR, PDPA, a
 Raw Video Frame
       │
       ▼
-┌─────────────────────────────────┐
-│  1. SHA-256 Frame Hash          │  ← Deduplication / tamper detection
-│  2. Face Detection (Haar)       │  ← OpenCV CascadeClassifier
-│  3. License Plate Detection     │  ← MSER + geometric filtering
-│  4. Region Anonymization        │  ← Pixelate / Gaussian / Solid fill
-│  5. HMAC-SHA256 ID Hash         │  ← Pseudonymise tracking IDs
-│  6. MySQL Audit Log             │  ← detection_events + audit_trail
-└─────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  1. Face Detection (Haar → RetinaFace   │
+│     → NVIDIA NIM via NemoBot)           │
+│  2. License Plate Detection (MSER)      │
+│  3. Privacy Transforms (Gaussian blur)  │
+│  4. AES-256-GCM Metadata Encryption     │
+│  5. GDPR Art.30 Audit Log Entry         │
+│     (SHA3-256 hash chain)               │
+└─────────────────────────────────────────┘
+      │
+      ▼  ← Textual feedback (natural language summary)
+┌─────────────────────────────────────────┐
+│  TextGrad Upstream Loop                 │
+│  • Loss = audit log feedback            │
+│  • Gradient = LLM critique              │
+│  • Update = refined pipeline config     │
+│  Backend: Claude (Haiku) or NemoBot     │
+└─────────────────────────────────────────┘
       │
       ▼
-Anonymized Frame → Cloud Analytics ✓ (No PII)
+Anonymized Frame + Updated Config + Compliance Report
 ```
-
----
-
-## MySQL Schema
-
-```sql
-anonymization_sessions   — One row per processing session
-detection_events         — Per-frame results (no PII; SHA-256 hashes only)
-tracking_id_map          — HMAC pseudonyms only (original IDs never stored)
-audit_trail              — Append-only GDPR Article 30 compliance log
-```
-
-**Views:**
-- `v_session_stats` — Live session statistics join
-- `v_daily_detection_summary` — Daily aggregate for dashboards
 
 ---
 
@@ -66,128 +60,80 @@ audit_trail              — Append-only GDPR Article 30 compliance log
 ### 1. Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/privacy-preserving-video-pipeline.git
+git clone https://github.com/Taishanrock/privacy-preserving-video-pipeline.git
 cd privacy-preserving-video-pipeline
-
-# Core (no MySQL connector needed for SQLite mode)
-pip install numpy pandas opencv-python cryptography pyyaml Pillow scipy
-
-# With MySQL connector
-pip install mysql-connector-python
-
-# With REST API
-pip install fastapi uvicorn python-multipart
+pip install numpy pandas opencv-python cryptography pyyaml Pillow scipy textgrad anthropic
 ```
 
-### 2. Set up MySQL
+### 2. Run the TextGrad Optimization Loop
 
 ```bash
-# Create database and user
-mysql -u root -p << 'SQL'
-CREATE DATABASE IF NOT EXISTS privacy_pipeline_db CHARACTER SET utf8mb4;
-CREATE USER IF NOT EXISTS 'pp_user'@'localhost' IDENTIFIED BY 'your_password';
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, INDEX
-    ON privacy_pipeline_db.* TO 'pp_user'@'localhost';
-FLUSH PRIVILEGES;
-SQL
-
-# Run migration
-mysql -u pp_user -p privacy_pipeline_db < migrations/001_initial_schema.sql
+export ANTHROPIC_API_KEY="sk-ant-api03-..."
+python scripts/textgrad_pipeline_v2.py --optimize
+# Results saved to: outputs/textgrad_results.json
 ```
 
-### 3. Configure
+### 3. Run the Base Pipeline (no API key needed)
 
 ```bash
-# Set secrets via environment (never in YAML)
-export PPVP_DB_PASSWORD="your_mysql_password"
-export PPVP_HMAC_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-export PPVP_DB_HOST="localhost"
-```
-
-### 4. Run
-
-```bash
-# Demo with synthetic frames (SQLite, no MySQL needed)
 python scripts/run_pipeline.py --frames 100
+```
 
-# With real MySQL
-python scripts/run_pipeline.py --mysql --frames 100 --source CAM-ENTRANCE-01
+### 4. NemoBot Backend (when available)
 
-# Process a folder of images
-ppvp-process --source /path/to/images/ --tracking-id CAM-001
-
-# Generate compliance report
-ppvp-report --session-id <session-uuid> --output reports/gdpr_report.json
+```bash
+export NEMOBOT_ENDPOINT="http://your-nemobot-server/v1"
+python scripts/textgrad_pipeline_v2.py --optimize
 ```
 
 ---
 
-## Python API
+## Benchmark: Three Eras
 
-```python
-import sys; sys.path.insert(0, "src")
-import numpy as np
-from privacy_pipeline.database.connection import DatabaseManager
-from privacy_pipeline.crypto.hasher import TrackingIDHasher
-from privacy_pipeline.anonymizer.detectors import FaceDetector, LicensePlateDetector
-from privacy_pipeline.anonymizer.blurrer import RegionBlurrer
-from privacy_pipeline.pipeline.processor import PrivacyPipeline
-from privacy_pipeline.pipeline.reporter import PipelineReporter
-
-# Connect to MySQL (falls back to SQLite if unavailable)
-db = DatabaseManager.for_testing()   # or: DatabaseManager.from_config(cfg)
-db.initialize_schema()
-
-# Build pipeline
-pipeline = PrivacyPipeline(
-    db             = db,
-    hasher         = TrackingIDHasher(secret_key=b"your-32-byte-key-here!!!!!!!!!!!"),
-    face_detector  = FaceDetector(),
-    plate_detector = LicensePlateDetector(),
-    face_blurrer   = RegionBlurrer(method="pixelate", strength=25),
-    plate_blurrer  = RegionBlurrer(method="solid"),
-    source_identifier = "CAM-ENTRANCE-01",
-)
-
-# Process frames
-with pipeline:
-    for frame in video_source:
-        result = pipeline.process_frame(frame, tracking_id="PERSON-001")
-        # result.anonymized_frame  → send to cloud
-        # result.face_count, result.plate_count, result.processing_latency_ms
-
-# Reporting
-reporter = PipelineReporter(db)
-reporter.print_session_summary(pipeline.session_id)
-compliance = reporter.compliance_report(session_id=pipeline.session_id)
-print(f"GDPR Article 30 compliant: {compliance['gdpr_article_30_met']}")
-```
+| Era | Detection | Privacy | Utility | P×U | Optimization |
+|-----|-----------|---------|---------|-----|--------------|
+| Pre-AI (~2018) | Fixed Gaussian blur | 0.85 | 0.45 | 0.38 | None |
+| CNN Baseline (~2022) | Haar Cascade + fixed blur | 0.72 | 0.78 | 0.56 | Manual tuning |
+| **PrivGrad (this work)** | RetinaFace / NVIDIA NIM + LoRA | TBD | TBD | TBD | TextGrad upstream loop |
 
 ---
 
-## Cryptography
+## Project Structure
 
-### HMAC-SHA256 Pseudonymisation
-
-```python
-from privacy_pipeline.crypto.hasher import TrackingIDHasher
-
-hasher = TrackingIDHasher(secret_key=b"your-32-byte-secret-key-here!!!!!")
-pseudo = hasher.pseudonymise("CAM-007:PERSON-1234")
-# → "3a7f92b1c4e8d0f6..." (64 hex chars)
-
-# Verify without storing original
-hasher.verify("CAM-007:PERSON-1234", pseudo)  # True
 ```
-
-### AES-256-GCM Metadata Encryption
-
-```python
-from privacy_pipeline.crypto.encryptor import MetadataEncryptor
-
-enc   = MetadataEncryptor.generate()
-token = enc.encrypt({"camera_id": "CAM-001", "zone": "A"})
-data  = enc.decrypt(token)   # {"camera_id": "CAM-001", "zone": "A"}
+privacy_pipeline/
+├── src/privacy_pipeline/          # Core library
+│   ├── anonymizer/                # FaceDetector, LicensePlateDetector, RegionBlurrer
+│   ├── crypto/                    # AES-256-GCM encryption, HMAC-SHA256 hasher
+│   ├── database/                  # MySQL + SQLite connection, repositories
+│   ├── pipeline/                  # PrivacyPipeline orchestrator, reporter
+│   ├── api/                       # FastAPI REST endpoints
+│   └── utils/                     # Config loader, structured logger
+├── scripts/
+│   ├── textgrad_pipeline_v2.py    # PrivGrad TextGrad optimization loop (main)
+│   ├── run_pipeline.py            # Base pipeline runner
+│   ├── api.py                     # API server entry point
+│   └── nemobot_tools.js           # NemoBot tool definitions
+├── tests/
+│   ├── unit/                      # Unit tests (62)
+│   ├── integration/               # Integration tests (43)
+│   ├── test_audit.py              # Audit log + hash chain demo
+│   └── test_detection.py          # Detection comparison demo
+├── data/
+│   ├── test_images/               # Sample frames for testing
+│   └── detection_comparison.csv   # Three-era benchmark data
+├── models/
+│   └── face_detection_yunet_2023mar.onnx
+├── outputs/
+│   └── textgrad_results.json      # TextGrad optimization results
+├── logs/                          # GDPR Art.30 audit log files (JSONL)
+├── overleaf_paper/
+│   └── main.tex                   # Research paper (LaTeX, latest version)
+├── configs/
+│   └── default.yaml
+├── migrations/
+│   └── 001_initial_schema.sql
+└── pyproject.toml
 ```
 
 ---
@@ -195,82 +141,21 @@ data  = enc.decrypt(token)   # {"camera_id": "CAM-001", "zone": "A"}
 ## GDPR Compliance
 
 | Requirement | Implementation |
-|-------------|---------------|
+|-------------|----------------|
 | **Article 5** — Data minimisation | Only hashes and counts stored; no PII |
-| **Article 17** — Right to erasure | `soft_delete_by_session()` + `GDPR-A17` audit tag |
-| **Article 25** — Privacy by Design | Anonymization applied before any data leaves edge |
-| **Article 30** — Records of processing | Immutable `audit_trail` table; all sessions logged |
+| **Article 17** — Right to erasure | LoRA adapter deletion = erasure of fine-tuned recognition |
+| **Article 25** — Privacy by Design | Anonymization applied before data leaves edge |
+| **Article 30** — Records of processing | SHA3-256 tamper-evident audit chain; also serves as TextGrad loss |
 | **Recital 26** — Pseudonymisation | HMAC-SHA256 with secret key; computationally irreversible |
-
----
-
-## Project Structure
-
-```
-privacy-preserving-video-pipeline/
-├── src/privacy_pipeline/
-│   ├── anonymizer/
-│   │   ├── detectors.py    # FaceDetector (Haar), LicensePlateDetector (MSER)
-│   │   └── blurrer.py      # RegionBlurrer: gaussian | pixelate | solid
-│   ├── crypto/
-│   │   ├── hasher.py       # TrackingIDHasher (HMAC-SHA256)
-│   │   └── encryptor.py    # MetadataEncryptor (AES-256-GCM)
-│   ├── database/
-│   │   ├── connection.py   # DatabaseManager (MySQL + SQLite fallback)
-│   │   ├── schema.py       # DDL for all 4 tables
-│   │   └── repositories.py # Session, Detection, TrackingID, Audit repos
-│   ├── pipeline/
-│   │   ├── processor.py    # PrivacyPipeline orchestrator
-│   │   └── reporter.py     # PipelineReporter (session & compliance reports)
-│   ├── api/
-│   │   └── app.py          # FastAPI REST endpoints
-│   └── utils/
-│       ├── config.py       # YAML loader + env var overrides
-│       └── logger.py       # Structured logging
-├── tests/
-│   ├── unit/               # 62 unit tests
-│   └── integration/        # 43 integration tests
-├── migrations/
-│   └── 001_initial_schema.sql   # Complete MySQL DDL + views
-├── configs/
-│   └── default.yaml
-└── scripts/
-    └── run_pipeline.py
-```
 
 ---
 
 ## Running Tests
 
 ```bash
-# All 105 tests (SQLite — no MySQL required)
 python -m unittest discover -s tests -p "test_*.py" -v
-
-# With pytest
 pytest tests/ -v -m "not mysql"
-
-# MySQL integration tests (requires live MySQL)
-PPVP_DB_HOST=localhost PPVP_DB_PASSWORD=yourpw pytest tests/ -v -m mysql
 ```
-
----
-
-## FastAPI REST API
-
-```bash
-pip install fastapi uvicorn python-multipart
-uvicorn "privacy_pipeline.api.app:create_app" --factory --port 8000
-```
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/process/frame` | POST | Anonymize a single image frame |
-| `/sessions` | GET | List recent sessions |
-| `/sessions/{id}` | GET | Session details |
-| `/sessions/{id}` | DELETE | GDPR erasure |
-| `/audit` | GET | Recent audit trail |
-| `/report/compliance` | GET | GDPR compliance report |
-| `/health` | GET | DB connectivity check |
 
 ---
 

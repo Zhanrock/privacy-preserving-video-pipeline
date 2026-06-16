@@ -6,3 +6,17 @@ dist/ build/ .eggs/ .venv/ venv/ env/
 .vscode/ .idea/ .DS_Store
 logs/ reports/*.json debug_frames/
 .env *.key
+
+# Research paper (managed separately in Overleaf)
+overleaf_paper/
+Video_Privacy_Analytics/
+Video_Privacy_Analytics.zip
+
+# Large binary model files (use Git LFS or download separately)
+models/*.onnx
+
+# Generated outputs (not source)
+outputs/
+
+# Old/superseded scripts
+scripts/text_grad_pipeline.py
