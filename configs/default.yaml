@@ -29,10 +29,12 @@ database:
 anonymization:
   face:
     enabled: true
-    detector: haar_cascade
+    detector: yunet               # haar_cascade | yunet | retinaface
+    detector_model_path: models/face_detection_yunet_2023mar.onnx
+    conf_threshold: 0.45          # lowered from 0.60 — catches partial faces at edges
     blur_method: pixelate         # gaussian | pixelate | solid
     blur_strength: 25
-    padding_px: 10
+    padding_px: 15                # increased from 10 — ensures full edge coverage
     min_detection_size: [30, 30]
   license_plate:
     enabled: true

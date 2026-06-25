@@ -41,7 +41,7 @@ import numpy as np
 
 from privacy_pipeline.anonymizer.blurrer import RegionBlurrer
 from privacy_pipeline.anonymizer.detectors import (
-    DetectedRegion, FaceDetector, LicensePlateDetector,
+    DetectedRegion, FaceDetector, LicensePlateDetector, create_face_detector,
 )
 from privacy_pipeline.crypto.hasher import TrackingIDHasher
 from privacy_pipeline.database.connection import DatabaseManager
@@ -209,11 +209,13 @@ class PrivacyPipeline:
 
         hasher = TrackingIDHasher(secret_key=key_bytes)
 
-        # Detectors
-        face_det  = (
-            FaceDetector(
-                min_size   = tuple(anon.face.min_detection_size),
-                padding    = anon.face.padding_px,
+        # Detectors — detector type driven by config (haar_cascade | yunet | retinaface)
+        face_det = (
+            create_face_detector(
+                getattr(anon.face, "detector", "haar_cascade"),
+                model_path     = getattr(anon.face, "detector_model_path", None),
+                conf_threshold = getattr(anon.face, "conf_threshold", 0.45),
+                padding        = anon.face.padding_px,
             )
             if anon.face.enabled else None
         )
