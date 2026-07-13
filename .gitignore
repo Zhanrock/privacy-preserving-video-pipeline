@@ -20,3 +20,14 @@ outputs/
 
 # Old/superseded scripts
 scripts/text_grad_pipeline.py
+
+# WiderFace dataset (large binary, download separately — see README)
+data/test_images/WIDER_val/
+data/test_images/wider_face_split/
+
+# NemoBot demo assets and screenshots
+Nemobot_Demo/
+img/
+
+# Local logs
+logs/

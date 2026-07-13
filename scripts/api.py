@@ -146,8 +146,8 @@ async def optimize(req: OptimizeRequest):
     try:
         import textgrad as tg
 
-        tg.set_backward_engine("claude-3-5-haiku-20241022", override=True)
-        engine = tg.get_engine("claude-3-5-haiku-20241022")
+        tg.set_backward_engine("claude-haiku-4-5-20251001", override=True)
+        engine = tg.get_engine("claude-haiku-4-5-20251001")
 
         pipeline_config = tg.Variable(
             value=INITIAL_PIPELINE_CONFIG,
