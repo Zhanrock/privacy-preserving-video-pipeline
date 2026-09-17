@@ -125,9 +125,25 @@ class YuNetDetector:
 class RetinaFaceDetector:
     """RetinaFace detector — best accuracy, handles heavy occlusion/angles.
 
-    Requires: pip install retina-face
-    FNR ~1.8% with 96%+ detection on partial faces at frame edges.
-    Falls back gracefully with ImportError if package not installed.
+    Uses insightface's ONNX ``det_10g`` model (the RetinaFace/SCRFD detector
+    from the buffalo_l pack) directly, NOT the ``retina-face`` PyPI package —
+    that package hard-depends on TensorFlow, which has no Python 3.14 build,
+    so it cannot be installed here at all (confirmed: `pip install retina-face`
+    fails dependency resolution on tensorflow).
+
+    Loads only the detector component, not the full buffalo_l pack (which
+    also bundles recognition/landmark/age-gender models we don't need for
+    face blurring) — ``insightface.app.FaceAnalysis``'s own ``allowed_modules``
+    filter does not actually skip loading those files in this insightface
+    version, and doing so caused an ONNX Runtime "bad allocation" / protobuf
+    "Arena alloc failed" error under this machine's memory pressure.
+    Loading just ``det_10g.onnx`` avoids that entirely.
+
+    Install: pip install insightface onnxruntime
+    Model auto-downloads to ~/.insightface/models/buffalo_l/ the first time
+    any insightface FaceAnalysis app is constructed with the default
+    ``buffalo_l`` pack; if that hasn't happened yet, construction here will
+    raise a clear FileNotFoundError telling you what to run.
     """
 
     def __init__(
@@ -136,31 +152,41 @@ class RetinaFaceDetector:
         padding: int = 15,
     ) -> None:
         try:
-            from retinaface import RetinaFace as _RF
-            self._rf = _RF
+            from insightface.model_zoo import model_zoo
         except ImportError as exc:
             raise ImportError(
-                "RetinaFaceDetector requires: pip install retina-face"
+                "RetinaFaceDetector requires: pip install insightface onnxruntime"
             ) from exc
+
+        import os
+        model_path = os.path.expanduser(
+            os.path.join("~", ".insightface", "models", "buffalo_l", "det_10g.onnx")
+        )
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"RetinaFace detector weights not found at {model_path}. "
+                "Trigger the one-time download with: "
+                "python -c \"from insightface.app import FaceAnalysis; "
+                "FaceAnalysis(name='buffalo_l').prepare(ctx_id=0)\""
+            )
+        self._detector = model_zoo.get_model(model_path, providers=["CPUExecutionProvider"])
+        self._detector.prepare(ctx_id=0, input_size=(640, 640))
         self._conf = conf_threshold
         self._padding = padding
-        logger.debug("RetinaFaceDetector initialised conf=%.2f", conf_threshold)
+        logger.debug("RetinaFaceDetector (insightface det_10g) initialised conf=%.2f", conf_threshold)
 
     def detect(self, frame: np.ndarray) -> List[DetectedRegion]:
         if frame is None or frame.size == 0:
             return []
         h, w = frame.shape[:2]
-        result = self._rf.detect_faces(frame)
+        bboxes, _kpss = self._detector.detect(frame, max_num=0)
         regions = []
-        if isinstance(result, dict):
-            for face_data in result.values():
-                area = face_data.get("facial_area", [])
-                conf = float(face_data.get("score", 1.0))
-                if conf < self._conf or len(area) < 4:
-                    continue
-                x1, y1, x2, y2 = int(area[0]), int(area[1]), int(area[2]), int(area[3])
-                r = DetectedRegion(x1, y1, x2 - x1, y2 - y1, "face", confidence=conf)
-                regions.append(r.with_padding(self._padding, h, w))
+        for box in bboxes:
+            x1, y1, x2, y2, conf = box
+            if conf < self._conf:
+                continue
+            r = DetectedRegion(int(x1), int(y1), int(x2 - x1), int(y2 - y1), "face", confidence=float(conf))
+            regions.append(r.with_padding(self._padding, h, w))
         logger.debug("RetinaFaceDetector: %d face(s)", len(regions))
         return regions
 

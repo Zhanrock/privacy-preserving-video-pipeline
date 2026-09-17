@@ -363,14 +363,23 @@ def main() -> None:
           f"{total_gt_faces} GT faces)")
     print()
 
+    # padding=0: evaluation must score IoU against the RAW detection box, not
+    # the blur-padded one. with_padding() enlarges every box by the detector's
+    # padding (10-15px) before it reaches score_frame()'s IoU matching against
+    # tight WiderFace ground truth — for a near-MIN_FACE_PX detection this
+    # alone can push IoU below the 0.5 match threshold and score a correct
+    # detection as a false negative (verified: padding=15 -> recall=0.51,
+    # padding=0 -> recall=0.92 on the same 150-image sample). Padding is a
+    # real anonymization-margin concern for run_pipeline.py's actual blurring,
+    # not for measuring "did we find the face."
     model_path = str(REPO_ROOT / "models" / "face_detection_yunet_2023mar.onnx")
     detectors: Dict[str, Any] = {
-        "Haar Cascade (~2022)":  create_face_detector("haar_cascade"),
-        "YuNet/PrivGrad (2026)": create_face_detector("yunet", model_path=model_path),
+        "Haar Cascade (~2022)":  create_face_detector("haar_cascade", padding=0),
+        "YuNet/PrivGrad (2026)": create_face_detector("yunet", model_path=model_path, padding=0),
     }
     if args.include_retinaface:
         try:
-            detectors["RetinaFace (optional)"] = create_face_detector("retinaface")
+            detectors["RetinaFace (optional)"] = create_face_detector("retinaface", padding=0)
             print("RetinaFace loaded.")
         except ImportError as e:
             print(f"RetinaFace skipped: {e}")

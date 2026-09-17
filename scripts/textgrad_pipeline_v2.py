@@ -34,16 +34,26 @@ Updates (April 2026):
 """
 
 import os
+import re
+import sys
 import json
 import time
 import hashlib
 import datetime
+from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-# textgrad is imported lazily inside run_textgrad_optimization() so that
-# importing this module (for AuditLog, AuditEntry, PrivacyOracle) does not
-# block on textgrad's slow initialization.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+for _p in (str(REPO_ROOT / "src"), str(_SCRIPTS_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+# textgrad, and the detector/WiderFace grounding helpers (benchmark_detectors,
+# privacy_pipeline.anonymizer.detectors), are imported lazily inside the
+# functions that need them, so importing this module (for AuditLog,
+# AuditEntry, PrivacyOracle) does not block on their slower initialization.
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +390,192 @@ Be concrete — suggest exact parameter values.
 
 
 # ---------------------------------------------------------------------------
-# 6. TEXTGRAD OPTIMIZATION LOOP
+# 6. REAL-PIPELINE GROUNDING
+# ---------------------------------------------------------------------------
+# The TextGrad loop rewrites INITIAL_PIPELINE_CONFIG as free-text natural
+# language. Everything in this section turns that text back into a runnable
+# detector, executes it against real WiderFace images, and returns MEASURED
+# metrics — replacing the previous hardcoded-formula AuditEntry values
+# (privacy_score=min(0.95, 0.72 + iter*0.07), etc.) with numbers a detector
+# actually produced. Without this, the loop optimizes against fiction.
+
+def _load_grounding_sample(sample_size: int, seed: int = 42):
+    """Fixed WiderFace image sample reused across every iteration, so
+    iteration-to-iteration score changes reflect the config change, not a
+    different sample."""
+    from benchmark_detectors import parse_widerface_gt, load_entries, WIDER_VAL_GT, WIDER_VAL_IMAGES
+
+    if not WIDER_VAL_GT.exists() or not WIDER_VAL_IMAGES.exists():
+        raise FileNotFoundError(
+            f"WiderFace dataset not found under {WIDER_VAL_IMAGES.parent}. "
+            "The TextGrad loop measures real detector performance every "
+            "iteration and needs this dataset — see benchmark_detectors.py "
+            "for the expected layout."
+        )
+    gt = parse_widerface_gt(WIDER_VAL_GT)
+    return load_entries(gt, WIDER_VAL_IMAGES, max_images=sample_size, seed=seed)
+
+
+def parse_config_to_detector_spec(config_text: str) -> dict:
+    """
+    Extract concrete detector parameters from TextGrad's rewritten config
+    text. TextGrad edits INITIAL_PIPELINE_CONFIG as natural language (it is
+    explicitly prompted to "suggest exact parameter values"), so this is a
+    best-effort regex extraction, not a structured parser — free-text
+    rewrites can phrase a value in ways the patterns below miss. Anything
+    not found falls back to the current default rather than raising, and
+    the extracted spec is logged with every iteration so the paper can show
+    parser fidelity across a run.
+    """
+    c = config_text.lower()
+
+    if "retinaface" in c:
+        detector_type = "retinaface"
+    elif "yunet" in c:
+        detector_type = "yunet"
+    elif "nvidia nim" in c or "nemobot api" in c:
+        # Not runnable locally — ground against the strongest detector we
+        # can actually execute rather than skip measurement.
+        detector_type = "yunet"
+    else:
+        detector_type = "haar_cascade"
+
+    conf_match = re.search(r"confidence threshold[^\d]*?([01]\.\d+)", c)
+    conf_threshold = float(conf_match.group(1)) if conf_match else 0.45
+
+    pad_match = re.search(r"padding[^\d]*?(\d+)\s*px", c)
+    padding = int(pad_match.group(1)) if pad_match else 15
+
+    kernel_match = re.search(r"kernel size[^\d]*?(\d+)", c)
+    blur_kernel = int(kernel_match.group(1)) if kernel_match else 31
+
+    return {
+        "detector_type": detector_type,
+        "conf_threshold": conf_threshold,
+        "padding": padding,
+        "blur_kernel": blur_kernel,
+    }
+
+
+def measure_real_performance(config_text: str, sample, verbose: bool = False) -> dict:
+    """
+    Instantiate the detector implied by `config_text` and run it over the
+    fixed WiderFace `sample`, returning real aggregate metrics (recall, FNR,
+    privacy/utility score, latency) via benchmark_detectors.run_detector —
+    the same scoring path used for the paper's WiderFace benchmark table, so
+    TextGrad-loop numbers and benchmark-table numbers are directly comparable.
+    """
+    from benchmark_detectors import run_detector
+    from privacy_pipeline.anonymizer.detectors import create_face_detector, LicensePlateDetector
+    import cv2
+
+    spec = parse_config_to_detector_spec(config_text)
+    model_path = str(REPO_ROOT / "models" / "face_detection_yunet_2023mar.onnx")
+
+    # padding=0 for the measurement detector: IoU-based recall/FNR must be
+    # scored against the raw detection box, not the blur-padded one — padding
+    # a near-MIN_FACE_PX box before matching it to tight WiderFace ground
+    # truth can push IoU below the 0.5 threshold and misscore a correct
+    # detection as a miss (see benchmark_detectors.py for the same fix and
+    # the measurement that found it: padding=15 -> recall=0.51 vs
+    # padding=0 -> recall=0.92 on an identical sample). The config's actual
+    # padding value is still recorded in `spec` for the audit trail — it's a
+    # real anonymization-margin parameter, just not one that should affect
+    # whether a face counts as "found."
+    def _build(detector_type: str):
+        if detector_type == "yunet":
+            return create_face_detector(
+                "yunet", model_path=model_path,
+                conf_threshold=spec["conf_threshold"], padding=0,
+            )
+        if detector_type == "retinaface":
+            return create_face_detector(
+                "retinaface",
+                conf_threshold=spec["conf_threshold"], padding=0,
+            )
+        return create_face_detector("haar_cascade", padding=0)
+
+    try:
+        detector = _build(spec["detector_type"])
+    except ImportError as e:
+        if verbose:
+            print(f"[WARNING] {spec['detector_type']} unavailable ({e}); measuring with YuNet instead.")
+        spec["detector_type"] = "yunet"
+        detector = _build("yunet")
+
+    outcome = run_detector(detector, sample)
+    summary = outcome.get("summary", {})
+    per_image = outcome.get("per_image", [])
+    if not summary:
+        raise RuntimeError("Detector produced no measurable output on the grounding sample.")
+
+    # Real license-plate candidate count. WiderFace has no plate ground truth,
+    # so this is a raw detection count from the actual MSER detector — not an
+    # accuracy metric — capped to a few frames to keep iterations fast.
+    plate_detector = LicensePlateDetector()
+    plate_counts = []
+    for img_path, _gt in sample[:10]:
+        frame = cv2.imread(str(img_path))
+        if frame is not None:
+            plate_counts.append(len(plate_detector.detect(frame)))
+    avg_plates = round(sum(plate_counts) / len(plate_counts)) if plate_counts else 0
+    avg_faces = round(sum(m["detected"] for m in per_image) / len(per_image)) if per_image else 0
+
+    issues = []
+    if summary["overall_fnr"] > 0.10:
+        issues.append(
+            f"{summary['overall_fnr']:.1%} of ground-truth faces missed on this "
+            f"iteration's {summary['images_tested']}-image sample "
+            f"({summary['total_fn']}/{summary['total_gt_faces']})"
+        )
+
+    return {
+        "spec": spec,
+        "detection_model": spec["detector_type"],
+        "faces_detected": avg_faces,
+        "plates_detected": avg_plates,
+        "privacy_score": summary["mean_privacy"],
+        "utility_score": summary["mean_utility"],
+        "recall": summary["overall_recall"],
+        "fnr": summary["overall_fnr"],
+        "latency_ms": summary["mean_latency_ms"],
+        "images_tested": summary["images_tested"],
+        "issues": issues,
+    }
+
+
+def _seed_real_audit_entries(audit_log: "AuditLog", results: dict, sample, n: int = 5) -> None:
+    """Seed the log with `n` real per-frame measurements from the INITIAL
+    config's detector (Haar Cascade), replacing the old
+    ``privacy_score=0.72 + i*0.01``-style hardcoded formula."""
+    from benchmark_detectors import run_detector
+    from privacy_pipeline.anonymizer.detectors import create_face_detector
+
+    detector = create_face_detector("haar_cascade", padding=0)  # see measure_real_performance
+    outcome = run_detector(detector, sample[:n])
+
+    for m in outcome.get("per_image", []):
+        entry = AuditEntry(
+            timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+            frame_id=Path(m["image"]).stem,
+            faces_detected=m["detected"],
+            plates_detected=0,
+            blur_kernel=31,
+            privacy_score=m["privacy_score"],
+            utility_score=m["utility_score"],
+            gdpr_compliant=True,
+            detection_model="haar_cascade",
+            issues=(
+                [f"{m['fnr']:.0%} FNR on this frame ({m['fn']}/{m['total_gt']} faces missed)"]
+                if m["fn"] > 0 else []
+            ),
+        )
+        audit_log.add_entry(entry)
+        results["audit_log_entries"].append(asdict(entry))
+
+
+# ---------------------------------------------------------------------------
+# 7. TEXTGRAD OPTIMIZATION LOOP
 # ---------------------------------------------------------------------------
 
 def run_textgrad_optimization(
@@ -389,6 +584,8 @@ def run_textgrad_optimization(
     verbose: bool = True,
     backend: str = "claude",   # "claude" | "nemobot"
     nemobot_endpoint: str = "",
+    grounding_sample_size: int = 40,
+    grounding_seed: int = 42,
 ) -> dict:
     """
     Core TextGrad loop.
@@ -396,6 +593,9 @@ def run_textgrad_optimization(
     backend="claude":   uses Claude API (current default)
     backend="nemobot":  uses NemoBot local LLM (planned — needs Prof Tan's docs)
                         This is the GDPR-strong version: no data leaves premises.
+
+    Every iteration's AuditEntry is built from `measure_real_performance()` —
+    an actual detector run over a fixed WiderFace sample — not a formula.
     """
 
     import textgrad as tg  # lazy import — only needed for the optimization loop
@@ -435,22 +635,14 @@ def run_textgrad_optimization(
     oracle = PrivacyOracle()
     optimizer = tg.TGD(parameters=[pipeline_config])
 
-    # Simulate initial audit entries (replace with real pipeline output)
-    for i in range(5):
-        entry = AuditEntry(
-            timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
-            frame_id=f"frame_{i:04d}",
-            faces_detected=2 + (i % 3),
-            plates_detected=i % 2,
-            blur_kernel=31,
-            privacy_score=0.72 + (i * 0.01),
-            utility_score=0.81 - (i * 0.02),
-            gdpr_compliant=True,
-            detection_model="haar_cascade",
-            issues=(["partial face missed at frame edge"] if i % 3 == 0 else []),
-        )
-        audit_log.add_entry(entry)
-        results["audit_log_entries"].append(asdict(entry))
+    sample = _load_grounding_sample(grounding_sample_size, grounding_seed)
+    if verbose:
+        print(f"[Grounding] {len(sample)} WiderFace images loaded "
+              f"(seed={grounding_seed}) — reused across all {n_iterations} iterations.")
+
+    # Seed the log with real measurements from the INITIAL config's detector,
+    # instead of a hardcoded formula.
+    _seed_real_audit_entries(audit_log, results, sample, n=5)
 
     # TextGrad loop
     for iteration in range(n_iterations):
@@ -479,25 +671,37 @@ def run_textgrad_optimization(
 
         optimizer.step()
 
-        # Add post-optimization audit entry
+        # Add a post-optimization audit entry built from a real detector run
+        # over the fixed grounding sample, using whatever parameters
+        # TextGrad's rewritten config now specifies.
+        measured = measure_real_performance(pipeline_config.value, sample, verbose=verbose)
         new_entry = AuditEntry(
             timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
             frame_id=f"post_iter{iteration+1}",
-            faces_detected=3,
-            plates_detected=1,
-            blur_kernel=max(21, 31 - (iteration + 1) * 2),
-            privacy_score=min(0.95, 0.72 + (iteration + 1) * 0.07),
-            utility_score=min(0.85, 0.75 + (iteration + 1) * 0.03),
-            gdpr_compliant=True,
-            detection_model="retinaface",  # simulated upgrade
-            issues=[],
+            faces_detected=measured["faces_detected"],
+            plates_detected=measured["plates_detected"],
+            blur_kernel=measured["spec"]["blur_kernel"],
+            privacy_score=measured["privacy_score"],
+            utility_score=measured["utility_score"],
+            gdpr_compliant=not oracle_eval["gdpr_gaps"],
+            detection_model=measured["detection_model"],
+            issues=measured["issues"],
         )
         audit_log.add_entry(new_entry)
+
+        if verbose:
+            print(f"\n[Measured — {measured['detection_model']}, "
+                  f"{measured['images_tested']} images]: "
+                  f"privacy={measured['privacy_score']:.3f} "
+                  f"utility={measured['utility_score']:.3f} "
+                  f"recall={measured['recall']:.3f} fnr={measured['fnr']:.3f}")
 
         results["iterations"].append({
             "iteration": iteration + 1,
             "duration_seconds": round(time.time() - t0, 2),
             "updated_config_preview": pipeline_config.value[:400],
+            "measured": {k: v for k, v in measured.items() if k != "spec"},
+            "detector_spec": measured["spec"],
         })
 
         if verbose:
@@ -583,16 +787,38 @@ if __name__ == "__main__":
     print("[Textual Feedback Preview (this becomes the TextGrad loss)]:")
     print(log.generate_textual_feedback())
 
+    def _get_int_arg(flag: str, default: int) -> int:
+        if flag in sys.argv:
+            idx = sys.argv.index(flag)
+            if idx + 1 < len(sys.argv):
+                try:
+                    return int(sys.argv[idx + 1])
+                except ValueError:
+                    pass
+        return default
+
     # Full optimization loop (requires API key)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     nemobot_ep = os.environ.get("NEMOBOT_ENDPOINT", "")
     backend = "nemobot" if nemobot_ep else "claude"
 
-    if api_key and "--optimize" in sys.argv:
-        print(f"\n[Running TextGrad Optimization — backend: {backend}]")
+    if "--test-grounding" in sys.argv:
+        # Exercises the real-detector grounding path with no API key and no
+        # TextGrad/LLM calls — for verifying the measurement code in isolation.
+        sample_size = _get_int_arg("--sample-size", 40)
+        print(f"\n[Testing grounding — {sample_size} WiderFace images, no API key needed]")
+        sample = _load_grounding_sample(sample_size, seed=42)
+        measured = measure_real_performance(INITIAL_PIPELINE_CONFIG, sample, verbose=True)
+        print(json.dumps(measured, indent=2, default=str))
+    elif api_key and "--optimize" in sys.argv:
+        n_iter = _get_int_arg("--iterations", 10)
+        sample_size = _get_int_arg("--sample-size", 40)
+        print(f"\n[Running TextGrad Optimization — backend: {backend}, "
+              f"{n_iter} iterations, grounding sample={sample_size} WiderFace images]")
         results = run_textgrad_optimization(
-            api_key, n_iterations=2, verbose=True,
-            backend=backend, nemobot_endpoint=nemobot_ep
+            api_key, n_iterations=n_iter, verbose=True,
+            backend=backend, nemobot_endpoint=nemobot_ep,
+            grounding_sample_size=sample_size,
         )
         out = os.path.join(os.path.dirname(__file__), "..", "outputs", "textgrad_results.json")
         with open(out, "w") as f:
@@ -600,5 +826,6 @@ if __name__ == "__main__":
         print(f"\nResults saved: {out}")
     else:
         print("\n[TextGrad loop ready]")
-        print("  To optimize: export ANTHROPIC_API_KEY=... && python textgrad_pipeline.py --optimize")
-        print("  For NemoBot: export NEMOBOT_ENDPOINT=http://... && python textgrad_pipeline.py --optimize")
+        print("  To optimize: export ANTHROPIC_API_KEY=... && python textgrad_pipeline_v2.py --optimize --iterations 10")
+        print("  For NemoBot: export NEMOBOT_ENDPOINT=http://... && python textgrad_pipeline_v2.py --optimize")
+        print("  To test grounding only (no API key): python textgrad_pipeline_v2.py --test-grounding")

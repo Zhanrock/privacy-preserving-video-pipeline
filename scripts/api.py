@@ -20,6 +20,7 @@ import os
 import sys
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 # Allow importing textgrad_pipeline_v2 from the same directory
@@ -39,6 +40,18 @@ app = FastAPI(
         "NTU CCDS — Assoc Prof Chee Wei Tan."
     ),
     version="1.0.0",
+)
+
+# NemoBot's postprocess JS runs in the browser tab, on the NemoBot page's own
+# origin (e.g. https://<something>.vercel.app) — its fetch() to localhost:8000
+# is cross-origin from the browser's perspective, so without CORS headers the
+# browser blocks the response even though this server is reachable. Local-only
+# dev API, not exposed publicly, so allow_origins=["*"] is fine here.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Module-level audit log — persists across requests for the lifetime of the server
@@ -171,7 +184,7 @@ async def optimize(req: OptimizeRequest):
         return OptimizeResponse(
             updated_config=pipeline_config.value,
             optimization_ran=True,
-            backend="claude-3-5-haiku-20241022",
+            backend="claude-haiku-4-5-20251001",
             message="TextGrad optimization completed successfully (1 iteration).",
             iterations=1,
         )
