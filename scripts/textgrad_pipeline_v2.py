@@ -3,8 +3,7 @@ TextGrad Integration for Privacy-Preserving Video Analytics Pipeline
 =====================================================================
 Research implementation — NTU CCDS
 Advisor: Assoc Prof Chee Wei Tan
-Student: Krittaphas Thanaphongphaisan (Year 1, Computer Engineering)
-Target venue: USENIX Security / NSDI 2026
+Student: Krittaphas Thanaphongphaisan (Computer Engineering)
 
 Architecture (three layers):
   DOWNSTREAM  — Pre-trained models (Haar Cascade → RetinaFace / NVIDIA NIM)

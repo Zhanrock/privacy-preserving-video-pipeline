@@ -1,7 +1,6 @@
 # PrivGrad — Privacy-Preserving Video Analytics
 
 > **NTU CCDS Research Project** | Assoc Prof Chee Wei Tan | June 2026
-> Target: NSDI 2026 / USENIX Security 2026
 
 [![CI](https://github.com/Taishanrock/privacy-preserving-video-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Taishanrock/privacy-preserving-video-pipeline/actions)
 [![Python](https://img.shields.io/badge/python-3.9%20|%203.10%20|%203.11-blue)](https://www.python.org)
