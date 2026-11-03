@@ -31,3 +31,6 @@ img/
 
 # Local logs
 logs/
+
+# Identity-labelled re-ID gallery (LFW subset, fetched separately; not redistributed)
+data/reid_gallery/
