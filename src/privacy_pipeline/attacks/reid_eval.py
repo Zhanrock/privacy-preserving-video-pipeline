@@ -92,10 +92,12 @@ class ReIDEvaluator:
         seed: int = 0,
         scale: float = 1.0,
         max_identities: Optional[int] = None,
+        oracle: bool = True,
     ) -> None:
         import onnxruntime as ort
 
         self.scale = scale
+        self.oracle = oracle
         self._det = cv2.FaceDetectorYN.create(
             str(yunet_path), "", (320, 320), score_threshold=0.45, nms_threshold=0.3
         )
@@ -208,8 +210,9 @@ class ReIDEvaluator:
             if d is not None and _iou(d[0], box) >= 0.5:
                 found += 1
             crops.append(self._align(anon, d[1]) if d is not None else self._crop(anon, box))
-            oracle_crops.append(self._align(anon, lmk))
-        emb, emb_oracle = self._embed(crops), self._embed(oracle_crops)
+            if self.oracle:
+                oracle_crops.append(self._align(anon, lmk))
+        emb = self._embed(crops)
 
         def acc(e):
             a = []
@@ -219,7 +222,7 @@ class ReIDEvaluator:
             return float(np.mean(a)), float(np.std(a))
 
         m, s = acc(emb)
-        mo, _ = acc(emb_oracle)
+        mo = acc(self._embed(oracle_crops))[0] if self.oracle else None
         ub = getattr(self, "upper_bound", m)
         res = {
             "spec": asdict(spec),

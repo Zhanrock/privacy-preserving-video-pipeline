@@ -48,13 +48,10 @@ def grid(quick: bool) -> list:
             + [AnonSpec("solid")]
         )
     g = [AnonSpec("clear"), AnonSpec("solid")]
-    g += [AnonSpec("gaussian", k) for k in (15, 31, 45, 61, 75, 101, 151)]
-    g += [AnonSpec("pixelate", b) for b in (4, 6, 8, 10, 12, 14, 16, 20, 25)]
-    g += [AnonSpec("pixelate", n, "relative") for n in (3, 4, 5, 6, 8, 10, 12)]
-    g += [AnonSpec("gaussian", p, "relative") for p in (15, 30, 50, 75, 100)]
-    # padding matters for alignment: does a bigger margin hide the landmarks?
-    g += [AnonSpec("pixelate", 6, "relative", pad) for pad in (0, 30)]
-    g += [AnonSpec("gaussian", 75, padding=pad) for pad in (0, 30)]
+    g += [AnonSpec("gaussian", k) for k in (31, 45, 75, 101, 151)]
+    g += [AnonSpec("pixelate", b) for b in (8, 12, 16, 25)]
+    g += [AnonSpec("pixelate", n, "relative") for n in (3, 4, 6, 8, 12)]
+    g += [AnonSpec("gaussian", p, "relative") for p in (30, 50, 100)]
     return g
 
 
@@ -120,13 +117,16 @@ def main() -> None:
     ap.add_argument("--scales", default="1,0.5,0.3")
     ap.add_argument("--splits", type=int, default=5)
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--no-oracle", action="store_true",
+                    help="skip the oracle-landmark attacker (halves the runtime)")
     ap.add_argument("--out-prefix", type=Path,
                     default=REPO_ROOT / "outputs" / f"privacy_utility_{datetime.date.today()}")
     args = ap.parse_args()
 
     t0, rows = time.time(), []
     for sc in (float(s) for s in args.scales.split(",")):
-        ev = ReIDEvaluator(args.gallery_dir, args.yunet, args.arcface, splits=args.splits, scale=sc)
+        ev = ReIDEvaluator(args.gallery_dir, args.yunet, args.arcface, splits=args.splits, scale=sc,
+                          oracle=not args.no_oracle)
         print(f"scale {sc:g}: {len(ev.items)} faces, "
               f"{len(ev.uniq)} ids, {ev.missed} missed, median face {ev.face_px:.0f}px, "
               f"chance {ev.chance:.3f}, clear acc {ev.upper_bound:.3f}", flush=True)
@@ -134,7 +134,7 @@ def main() -> None:
             r = ev.evaluate(spec)
             rows.append(r)
             print(f"  {spec.key:<26} attack {r['attack_acc']:.3f}±{r['attack_std']:.3f}"
-                  f"  oracle {r['attack_acc_oracle']:.3f}  detect {r['utility_detect']:.3f}"
+                  f"  oracle {r['attack_acc_oracle'] or 0:.3f}  detect {r['utility_detect']:.3f}"
                   f"  t={time.time() - t0:.0f}s", flush=True)
     pareto(rows)
 
@@ -152,7 +152,7 @@ def main() -> None:
             s = r["spec"]
             w.writerow([r["scale"], s["method"], s["mode"], s["strength"], s["padding"],
                         f"{r['attack_acc']:.4f}", f"{r['attack_std']:.4f}",
-                        f"{r['attack_acc_oracle']:.4f}", f"{r['privacy']:.4f}",
+                        f"{r['attack_acc_oracle'] or float('nan'):.4f}", f"{r['privacy']:.4f}",
                         f"{r['utility_detect']:.4f}", r["pareto"]])
     plot(rows, Path(f"{args.out_prefix}.png"))
     print(f"\nPareto front (privacy >= 0.95 shown first):")
