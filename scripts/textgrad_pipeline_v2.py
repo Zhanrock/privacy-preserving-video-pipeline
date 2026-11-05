@@ -71,7 +71,10 @@ Detection Model:
     (adapter file is separable — enables Art.17 erasure by deleting adapter)
 
 Face Detection Parameters:
+  - Blur method: gaussian  (options: gaussian | pixelate | solid)
   - Blur strength: Gaussian kernel size = 31
+    (strength can also be set relative to face size, e.g. "N blocks across the
+     face" for pixelate or "P% of face width" for gaussian)
   - Blur sigma: 15
   - Detection confidence threshold: 0.6
   - Padding around detected face: 10px
@@ -448,15 +451,40 @@ def parse_config_to_detector_spec(config_text: str) -> dict:
     kernel_match = re.search(r"kernel size[^\d]*?(\d+)", c)
     blur_kernel = int(kernel_match.group(1)) if kernel_match else 31
 
+    # Anonymization method/strength, so the re-ID attacker (--reid-gallery)
+    # scores what the config actually says. Relative strength = blocks across
+    # the face (pixelate) or kernel as % of face width (gaussian).
+    method_match = re.search(r"blur method[^a-z]*(gaussian|pixelate|solid)", c)
+    if method_match:
+        blur_method = method_match.group(1)
+    elif re.search(r"\b(pixelat|mosaic)", c):
+        blur_method = "pixelate"
+    elif re.search(r"solid (fill|mask|box)|black box", c):
+        blur_method = "solid"
+    else:
+        blur_method = "gaussian"
+    blur_mode, blur_strength = "absolute", float(blur_kernel)
+    rel_match = re.search(r"(\d+(?:\.\d+)?)\s*blocks? across", c) or re.search(
+        r"(\d+(?:\.\d+)?)\s*%\s*of (?:the )?face width", c)
+    if rel_match:
+        blur_mode, blur_strength = "relative", float(rel_match.group(1))
+    elif blur_method == "pixelate":
+        blk = re.search(r"block size[^\d]*?(\d+)", c)
+        blur_strength = float(blk.group(1)) if blk else 25.0
+
     return {
         "detector_type": detector_type,
         "conf_threshold": conf_threshold,
         "padding": padding,
         "blur_kernel": blur_kernel,
+        "blur_method": blur_method,
+        "blur_strength": blur_strength,
+        "blur_mode": blur_mode,
     }
 
 
-def measure_real_performance(config_text: str, sample, verbose: bool = False) -> dict:
+def measure_real_performance(config_text: str, sample, verbose: bool = False,
+                             reid=None) -> dict:
     """
     Instantiate the detector implied by `config_text` and run it over the
     fixed WiderFace `sample`, returning real aggregate metrics (recall, FNR,
@@ -528,13 +556,42 @@ def measure_real_performance(config_text: str, sample, verbose: bool = False) ->
             f"({summary['total_fn']}/{summary['total_gt_faces']})"
         )
 
+    reid_metrics = None
+    privacy_score = summary["mean_privacy"]
+    utility_score = summary["mean_utility"]
+    if reid is not None:
+        # Attack-based privacy (decisions 2026-11-03): end-to-end re-ID rate =
+        # missed faces stay clear (identified at the clear upper bound) +
+        # detected faces are anonymized and attacked.
+        from privacy_pipeline.attacks.reid_eval import AnonSpec
+        anon = AnonSpec(spec["blur_method"], spec["blur_strength"], spec["blur_mode"],
+                        spec["padding"])
+        r = reid.evaluate(anon)
+        recall = summary["overall_recall"]
+        e2e = (1 - recall) * reid.upper_bound + recall * r["attack_acc"]
+        privacy_score = float(min(1, max(0, 1 - (e2e - r["chance"])
+                                         / max(reid.upper_bound - r["chance"], 1e-6))))
+        utility_score = r["utility_detect"]
+        reid_metrics = {**r, "end_to_end_reid": e2e}
+        issues.append(
+            f"Re-identification attacker matches {r['attack_acc']:.0%} of anonymized faces "
+            f"to the right person ({anon.key}; chance {r['chance']:.0%}); with "
+            f"{1 - recall:.0%} of faces missed by the detector, end-to-end re-ID is {e2e:.0%}"
+        )
+        if r["utility_detect"] < 0.75:
+            issues.append(
+                f"Only {r['utility_detect']:.0%} of anonymized faces are still detectable, so "
+                f"counting/tracking analytics on the output stream break"
+            )
+
     return {
         "spec": spec,
+        "reid": reid_metrics,
         "detection_model": spec["detector_type"],
         "faces_detected": avg_faces,
         "plates_detected": avg_plates,
-        "privacy_score": summary["mean_privacy"],
-        "utility_score": summary["mean_utility"],
+        "privacy_score": privacy_score,
+        "utility_score": utility_score,
         "recall": summary["overall_recall"],
         "fnr": summary["overall_fnr"],
         "latency_ms": summary["mean_latency_ms"],
@@ -585,6 +642,7 @@ def run_textgrad_optimization(
     nemobot_endpoint: str = "",
     grounding_sample_size: int = 40,
     grounding_seed: int = 42,
+    reid=None,
 ) -> dict:
     """
     Core TextGrad loop.
@@ -673,7 +731,8 @@ def run_textgrad_optimization(
         # Add a post-optimization audit entry built from a real detector run
         # over the fixed grounding sample, using whatever parameters
         # TextGrad's rewritten config now specifies.
-        measured = measure_real_performance(pipeline_config.value, sample, verbose=verbose)
+        measured = measure_real_performance(pipeline_config.value, sample,
+                                            verbose=verbose, reid=reid)
         new_entry = AuditEntry(
             timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
             frame_id=f"post_iter{iteration+1}",
@@ -699,7 +758,8 @@ def run_textgrad_optimization(
             "iteration": iteration + 1,
             "duration_seconds": round(time.time() - t0, 2),
             "updated_config_preview": pipeline_config.value[:400],
-            "measured": {k: v for k, v in measured.items() if k != "spec"},
+            "measured": {k: v for k, v in measured.items() if k not in ("spec", "reid")},
+            "reid": measured["reid"],
             "detector_spec": measured["spec"],
         })
 
@@ -801,13 +861,24 @@ if __name__ == "__main__":
     nemobot_ep = os.environ.get("NEMOBOT_ENDPOINT", "")
     backend = "nemobot" if nemobot_ep else "claude"
 
+    reid = None
+    if "--reid-gallery" in sys.argv:
+        # Score privacy with the re-ID attacker instead of detector recall.
+        from privacy_pipeline.attacks.reid_eval import ReIDEvaluator
+        gal = Path(sys.argv[sys.argv.index("--reid-gallery") + 1])
+        print(f"[Re-ID] loading gallery {gal} ...")
+        reid = ReIDEvaluator(gal, REPO_ROOT / "models" / "face_detection_yunet_2023mar.onnx")
+        print(f"[Re-ID] {len(reid.items)} faces, {len(reid.uniq)} identities, "
+              f"clear-face attack accuracy {reid.upper_bound:.1%}")
+
     if "--test-grounding" in sys.argv:
         # Exercises the real-detector grounding path with no API key and no
         # TextGrad/LLM calls — for verifying the measurement code in isolation.
         sample_size = _get_int_arg("--sample-size", 40)
         print(f"\n[Testing grounding — {sample_size} WiderFace images, no API key needed]")
         sample = _load_grounding_sample(sample_size, seed=42)
-        measured = measure_real_performance(INITIAL_PIPELINE_CONFIG, sample, verbose=True)
+        measured = measure_real_performance(INITIAL_PIPELINE_CONFIG, sample, verbose=True,
+                                            reid=reid)
         print(json.dumps(measured, indent=2, default=str))
     elif api_key and "--optimize" in sys.argv:
         n_iter = _get_int_arg("--iterations", 10)
@@ -817,7 +888,7 @@ if __name__ == "__main__":
         results = run_textgrad_optimization(
             api_key, n_iterations=n_iter, verbose=True,
             backend=backend, nemobot_endpoint=nemobot_ep,
-            grounding_sample_size=sample_size,
+            grounding_sample_size=sample_size, reid=reid,
         )
         out = os.path.join(os.path.dirname(__file__), "..", "outputs", "textgrad_results.json")
         with open(out, "w") as f:
